@@ -1,65 +1,307 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { MessageSquarePlus } from "lucide-react";
+import { AgentShell } from "@/components/agent-shell";
+import { ChatComposer } from "@/components/chat-composer";
+import { ChatThread, type UiMessage, type SearchSource } from "@/components/chat-thread";
+import { ErrorBanner } from "@/components/error-banner";
+import type { ClarifyingQuestion } from "@/components/question-form";
+import type { StructuredResultData } from "@/components/structured-result";
+
+type AgentState = {
+  searchContext: SearchSource[];
+  round: number;
+  allAnswers: Record<string, string>;
+};
 
 export default function Home() {
+  const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [query, setQuery] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [sources, setSources] = useState<SearchSource[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [pendingQuestions, setPendingQuestions] = useState<ClarifyingQuestion[]>([]);
+  const [waitingForAnswers, setWaitingForAnswers] = useState(false);
+  const [agentState, setAgentState] = useState<AgentState>({
+    searchContext: [],
+    round: 1,
+    allAnswers: {},
+  });
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
+
+  const callAgent = async (
+    requestMessages: UiMessage[],
+    answers?: Record<string, string>,
+    searchContext?: SearchSource[],
+    round?: number
+  ) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setIsLoading(true);
+    setError(null);
+    setStatus(null);
+    setSources([]);
+    setPendingQuestions([]);
+    setWaitingForAnswers(false);
+
+    let currentSources: SearchSource[] = searchContext || [];
+
+    try {
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: requestMessages
+            .filter((m) => m.role === "user" || (m.role === "assistant" && m.content))
+            .map((m) => ({ role: m.role, content: m.content })),
+          answers,
+          searchContext,
+          round: round || 1,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        const message = await response.text();
+        throw new Error(message || "Request failed");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          try {
+            const event = JSON.parse(line) as {
+              type: string;
+              data?: string;
+              message?: string;
+              sources?: SearchSource[];
+              questions?: ClarifyingQuestion[];
+              result?: StructuredResultData;
+            };
+
+            if (event.type === "sources" && event.sources) {
+              currentSources = event.sources;
+              setSources(event.sources);
+              setAgentState((prev) => ({ ...prev, searchContext: event.sources! }));
+            }
+
+            if (event.type === "status" && event.data) {
+              setStatus(event.data);
+            }
+
+            if (event.type === "questions" && event.questions) {
+              setPendingQuestions(event.questions);
+              setSources([]);
+              setStatus(null);
+            }
+
+            if (event.type === "waiting_for_answers") {
+              setWaitingForAnswers(true);
+              // Update the last message to show waiting state
+              setMessages((prev) => {
+                const updated = [...prev];
+                const lastIdx = updated.length - 1;
+                if (lastIdx >= 0 && updated[lastIdx].role === "assistant") {
+                  updated[lastIdx] = { ...updated[lastIdx], isWaiting: true };
+                }
+                return updated;
+              });
+            }
+
+            if (event.type === "final_result" && event.result) {
+              setSources([]);
+              setStatus(null);
+              // Update the last assistant message with the final result
+              setMessages((prev) => {
+                const updated = [...prev];
+                const lastIdx = updated.length - 1;
+                if (lastIdx >= 0 && updated[lastIdx].role === "assistant") {
+                  updated[lastIdx] = {
+                    ...updated[lastIdx],
+                    finalResult: event.result,
+                    isWaiting: false,
+                    sources: currentSources,
+                  };
+                }
+                return updated;
+              });
+            }
+
+            if (event.type === "error") {
+              setError(event.message ?? "Agent error");
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      const message = err instanceof Error ? err.message : "Unexpected error";
+      setError(message);
+    } finally {
+      setIsLoading(false);
+      setStatus(null);
+    }
+  };
+
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError(null);
+
+    const trimmed = query.trim();
+    if (!trimmed) return;
+
+    // Reset agent state for new query
+    setAgentState({
+      searchContext: [],
+      round: 1,
+      allAnswers: {},
+    });
+    setPendingQuestions([]);
+    setWaitingForAnswers(false);
+
+    const requestMessages: UiMessage[] = [
+      ...messages,
+      { role: "user", content: trimmed },
+    ];
+
+    setMessages([...requestMessages, { role: "assistant", content: "" }]);
+    setQuery("");
+
+    await callAgent(requestMessages, undefined, undefined, 1);
+  };
+
+  const handleAnswerQuestions = async (answers: Record<string, string>) => {
+    // Merge with existing answers
+    const allAnswers = { ...agentState.allAnswers, ...answers };
+    const nextRound = agentState.round + 1;
+
+    setAgentState((prev) => ({
+      ...prev,
+      allAnswers,
+      round: nextRound,
+    }));
+
+    // Update the current waiting message to show it's processing
+    setMessages((prev) => {
+      const updated = [...prev];
+      const lastIdx = updated.length - 1;
+      if (lastIdx >= 0 && updated[lastIdx].role === "assistant") {
+        updated[lastIdx] = {
+          ...updated[lastIdx],
+          isWaiting: false,
+          questions: pendingQuestions,
+        };
+      }
+      // Add a new assistant message for the next response
+      return [...updated, { role: "assistant", content: "" }];
+    });
+
+    // Clear pending questions
+    setPendingQuestions([]);
+    setWaitingForAnswers(false);
+
+    // Get original messages (without the assistant placeholder)
+    const originalMessages = messages.filter((m) => m.role === "user");
+
+    await callAgent(
+      originalMessages,
+      allAnswers,
+      agentState.searchContext,
+      nextRound
+    );
+  };
+
+  const handleNewChat = () => {
+    // Check if there are any messages in the current chat
+    if (messages.length > 0) {
+      const confirmed = window.confirm(
+        "Are you sure you want to start a new chat? All current messages and chat information will be lost."
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    // Reset all state for a new chat
+    abortRef.current?.abort();
+    setMessages([]);
+    setQuery("");
+    setIsLoading(false);
+    setStatus(null);
+    setSources([]);
+    setError(null);
+    setPendingQuestions([]);
+    setWaitingForAnswers(false);
+    setAgentState({
+      searchContext: [],
+      round: 1,
+      allAnswers: {},
+    });
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+    <AgentShell>
+      {/* New Chat Button - Top Left */}
+      <button
+        onClick={handleNewChat}
+        className="absolute left-6 top-6 z-20 flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm font-medium text-zinc-200 transition-colors hover:bg-zinc-700 hover:text-white"
+        title="Start new chat"
+      >
+        <MessageSquarePlus className="h-4 w-4" />
+        <span>New Chat</span>
+      </button>
+
+      {/* Main chat area */}
+      <main className="relative z-10 flex h-full w-full flex-1 flex-col p-4">
+        <section className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col rounded-2xl border border-zinc-800 bg-zinc-900/90 shadow-lg backdrop-blur-sm">
+          <ChatThread
+            messages={messages}
+            status={status}
+            sources={sources}
+            pendingQuestions={pendingQuestions}
+            waitingForAnswers={waitingForAnswers}
+            onAnswerQuestions={handleAnswerQuestions}
+            isLoading={isLoading}
+          />
+
+          <ChatComposer
+            value={query}
+            isLoading={isLoading || waitingForAnswers}
+            onChange={setQuery}
+            onSubmit={handleSubmit}
+            onStop={() => abortRef.current?.abort()}
+            disabled={waitingForAnswers}
+          />
+        </section>
+
+        {error ? (
+          <div className="mx-auto mt-3 w-full max-w-4xl">
+            <ErrorBanner message={error} />
+          </div>
+        ) : null}
       </main>
-    </div>
+    </AgentShell>
   );
 }
