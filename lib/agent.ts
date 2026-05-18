@@ -1,4 +1,5 @@
-import OpenAI from "openai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { generateText } from "ai";
 import { type Env } from "./env";
 import { search, type SearchResult } from "./search";
 
@@ -20,6 +21,8 @@ export type StructuredResult = {
   details: string;
   sources: SearchResult[];
 };
+
+type GatewayModel = Parameters<typeof generateText>[0]["model"];
 
 export type AgentEvent =
   | { type: "status"; data: string }
@@ -93,8 +96,7 @@ function generateSearchQueries(userQuery: string, context?: string): string[] {
 }
 
 async function analyzeAndGenerateQuestions(
-  openai: OpenAI,
-  model: string,
+  model: GatewayModel,
   query: string,
   searchResults: SearchResult[],
   previousAnswers?: Record<string, string>
@@ -116,16 +118,16 @@ ${Object.entries(previousAnswers)
   }
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await generateText({
       model,
       messages: [
         { role: "system", content: ANALYSIS_PROMPT },
         { role: "user", content: userContent },
       ],
-      max_tokens: 1000,
+      maxTokens: 1000,
     });
 
-    const content = response.choices[0]?.message?.content || "";
+    const content = response.text || "";
     const jsonMatch = content.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {
@@ -143,8 +145,7 @@ ${Object.entries(previousAnswers)
 }
 
 async function generateFinalAnswer(
-  openai: OpenAI,
-  model: string,
+  model: GatewayModel,
   query: string,
   searchResults: SearchResult[],
   answers: Record<string, string>
@@ -168,16 +169,16 @@ ${searchContext}
 Based on the user's specific requirements and the search results, provide a comprehensive final answer.`;
 
   try {
-    const response = await openai.chat.completions.create({
+    const response = await generateText({
       model,
       messages: [
         { role: "system", content: FINAL_ANSWER_PROMPT },
         { role: "user", content: userContent },
       ],
-      max_tokens: 2000,
+      maxTokens: 2000,
     });
 
-    const content = response.choices[0]?.message?.content || "";
+    const content = response.text || "";
     const jsonMatch = content.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {
@@ -205,10 +206,11 @@ export async function* runAgent(
   env: Env,
   request: AgentRequest
 ): AsyncGenerator<AgentEvent> {
-  const openai = new OpenAI({
-    apiKey: env.OPENROUTER_API_KEY,
-    baseURL: env.OPENROUTER_BASE_URL,
+  const openai = createOpenAI({
+    apiKey: env.VERCEL_AI_GATEWAY_API_KEY,
+    baseURL: env.VERCEL_AI_GATEWAY_BASE_URL,
   });
+  const model = openai(env.VERCEL_AI_GATEWAY_MODEL);
 
   const {
     messages,
@@ -258,8 +260,7 @@ export async function* runAgent(
     yield { type: "status", data: "Generating comprehensive answer..." };
 
     const result = await generateFinalAnswer(
-      openai,
-      env.OPENROUTER_MODEL,
+      model,
       originalQuery,
       searchResults,
       answers || {}
@@ -272,8 +273,7 @@ export async function* runAgent(
 
   // Analyze and potentially ask questions
   const analysis = await analyzeAndGenerateQuestions(
-    openai,
-    env.OPENROUTER_MODEL,
+    model,
     originalQuery,
     searchResults,
     answers
@@ -290,8 +290,7 @@ export async function* runAgent(
   yield { type: "status", data: "Generating comprehensive answer..." };
 
   const result = await generateFinalAnswer(
-    openai,
-    env.OPENROUTER_MODEL,
+    model,
     originalQuery,
     searchResults,
     answers || {}

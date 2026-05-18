@@ -1,15 +1,20 @@
 ## Exa MCP Research Agent
 
-Deep-search anything with Exa MCP and explain via OpenRouter model `xiaomi/mimo-v2-flash:free` using a LangChain tools agent.
+Deep-search anything with Exa MCP and explain via the Vercel AI Gateway model `deepseek/deepseek-v4-flash` using the Vercel AI SDK.
+
+### Features
+- Multi-query web search via Exa with deduped results.
+- Clarifying question loop for ambiguous queries.
+- Structured answers with summaries, key points, and cited sources.
+- Streaming NDJSON responses from the API route for a responsive UI.
 
 ### Prerequisites
-- Node.js 18+ and Bun installed
-- Environment variables in `.env.local`:
-	- `OPENROUTER_API_KEY` – OpenRouter API key
-	- `OPENROUTER_BASE_URL` (optional) – defaults to `https://openrouter.ai/api/v1`
-	- `OPENROUTER_MODEL` (optional) – defaults to `xiaomi/mimo-v2-flash:free`
+- Node.js 18+
+- Environment variables in `.env.local` (copy from `.env.examples`):
+	- `VERCEL_AI_GATEWAY_API_KEY` – Vercel AI Gateway API key
+	- `VERCEL_AI_GATEWAY_BASE_URL` (optional) – defaults to `https://gateway.ai.vercel.com/v1`
+	- `VERCEL_AI_GATEWAY_MODEL` (optional) – defaults to `deepseek/deepseek-v4-flash`
 	- `EXA_API_KEY` – Exa MCP API key
-	- `EXA_SEARCH_URL` (optional) – defaults to `https://api.exa.ai/search`
 
 ### Install
 
@@ -23,7 +28,7 @@ bun install
 bun dev
 ```
 
-Visit http://localhost:3000. Enter a query, optionally choose a response style, and the agent will stream results as it searches Exa and reasons with the OpenRouter model.
+Visit http://localhost:3000. Enter a query, optionally choose a response style, and the agent will stream results as it searches Exa and reasons with the Vercel AI Gateway model.
 
 ### Production build
 
