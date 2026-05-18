@@ -95,6 +95,27 @@ function generateSearchQueries(userQuery: string, context?: string): string[] {
   return queries.slice(0, 2);
 }
 
+async function callGenerateWithRetry(opts: any, maxAttempts = 5): Promise<any> {
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      return await generateText(opts as any);
+    } catch (err: any) {
+      const isRetryable = err?.isRetryable ?? true;
+      console.error(`generateText attempt ${attempt} failed:`, err?.message ?? err);
+
+      if (attempt >= maxAttempts || !isRetryable) {
+        throw err;
+      }
+
+      const backoff = Math.min(2000 * 2 ** (attempt - 1), 10000);
+      const jitter = Math.floor(Math.random() * 300);
+      await new Promise((res) => setTimeout(res, backoff + jitter));
+    }
+  }
+}
+
 async function analyzeAndGenerateQuestions(
   model: GatewayModel,
   query: string,
@@ -120,14 +141,12 @@ ${Object.entries(previousAnswers)
     try {
     const opts: any = {
       model,
-      messages: [
-        { role: "system", content: ANALYSIS_PROMPT },
-        { role: "user", content: userContent },
-      ],
+      system: ANALYSIS_PROMPT,
+      messages: [{ role: "user", content: userContent }],
       maxTokens: 1000,
     };
 
-    const response = await generateText(opts as any);
+    const response = await callGenerateWithRetry(opts);
 
     const content = response.text || "";
     const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -173,14 +192,12 @@ Based on the user's specific requirements and the search results, provide a comp
     try {
     const opts: any = {
       model,
-      messages: [
-        { role: "system", content: FINAL_ANSWER_PROMPT },
-        { role: "user", content: userContent },
-      ],
+      system: FINAL_ANSWER_PROMPT,
+      messages: [{ role: "user", content: userContent }],
       maxTokens: 2000,
     };
 
-    const response = await generateText(opts as any);
+    const response = await callGenerateWithRetry(opts);
 
     const content = response.text || "";
     const jsonMatch = content.match(/\{[\s\S]*\}/);
