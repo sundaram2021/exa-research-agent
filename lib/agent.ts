@@ -117,15 +117,17 @@ ${Object.entries(previousAnswers)
   .join("\n\n")}`;
   }
 
-  try {
-    const response = await generateText({
+    try {
+    const opts: any = {
       model,
       messages: [
         { role: "system", content: ANALYSIS_PROMPT },
         { role: "user", content: userContent },
       ],
       maxTokens: 1000,
-    });
+    };
+
+    const response = await generateText(opts as any);
 
     const content = response.text || "";
     const jsonMatch = content.match(/\{[\s\S]*\}/);
@@ -168,15 +170,17 @@ ${searchContext}
 
 Based on the user's specific requirements and the search results, provide a comprehensive final answer.`;
 
-  try {
-    const response = await generateText({
+    try {
+    const opts: any = {
       model,
       messages: [
         { role: "system", content: FINAL_ANSWER_PROMPT },
         { role: "user", content: userContent },
       ],
       maxTokens: 2000,
-    });
+    };
+
+    const response = await generateText(opts as any);
 
     const content = response.text || "";
     const jsonMatch = content.match(/\{[\s\S]*\}/);
