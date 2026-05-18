@@ -7,7 +7,7 @@ const envSchema = z.object({
   VERCEL_AI_GATEWAY_BASE_URL: z
     .string()
     .url()
-    .default("https://gateway.ai.vercel.com/v1"),
+    .default("https://ai-gateway.vercel.sh/v1"),
   VERCEL_AI_GATEWAY_MODEL: z
     .string()
     .default("deepseek/deepseek-v4-flash"),
