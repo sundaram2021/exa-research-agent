@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Exa MCP Research Agent",
-  description: "Deep-search explanations powered by Exa and OpenRouter",
+  description: "Deep-search explanations powered by Exa and Vercel AI Gateway",
 };
 
 export default function RootLayout({
